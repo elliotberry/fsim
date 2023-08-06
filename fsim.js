@@ -1,41 +1,30 @@
 import fs from 'fs';
 import path from 'path';
+import {dice} from './dice.js';
+import {reviverMap, replacerMap} from './map.js'
+import {readIgnores} from './ignores.js';
 
 const IGNORE_FILE = '.fsimignore';
 const CACHE_FILE = '.fsimcache';
 
 let bigrams = new Map();
 
-// https://stackoverflow.com/a/56150320/209184
-const replacerMap = (key, value) => {
-  if (value instanceof Map) {
-    return {
-      dataType: 'Map',
-      value: [...value],
-    };
-  } else {
-    return value;
-  }
-};
 
-const reviverMap = (key, value) => {
-  if (typeof value === 'object' && value !== null) {
-    if (value.dataType === 'Map') {
-      return new Map(value.value);
-    }
-  }
-  return value;
-};
-
-const fsim = function (options) {
-  const fileCache = path.join(options.dir, CACHE_FILE);
-  if (options.cache && fs.existsSync(fileCache)) {
+const initFileCache = (dir, cacheFile, cacheEnabled) => {
+  const fileCache = path.join(dir, cacheFile);
+  if (cacheEnabled && fs.existsSync(fileCache)) {
     try {
       bigrams = new Map(JSON.parse(fs.readFileSync(fileCache, {encoding: 'utf8', flag: 'r'}), reviverMap));
     } catch (e) {
       console.warn(`Failed to read cache file ${fileCache}: ${e.message}`);
     }
   }
+  return fileCache;
+};
+
+const fsim = function (options) {
+  
+  const fileCache = initFileCache(options.dir, CACHE_FILE, options.cache);
 
   const ignores = readIgnores(path.join(options.dir, IGNORE_FILE), options.separator);
   const results = [];
@@ -59,12 +48,10 @@ const fsim = function (options) {
   return results;
 };
 
-const stripExtension = file => {
-  const dot = file.lastIndexOf('.');
-  if (dot > -1 && file.length - dot < 10) {
-    return file.slice(0, dot);
-  }
-  return file;
+const stripExtension = filePath => {
+  const basename = path.basename(filePath);
+  const extension = path.extname(basename);
+  return basename.slice(0, -extension.length);
 };
 
 const findSimilar = (ref, files, minRating, ignores) => {
@@ -77,7 +64,7 @@ const findSimilar = (ref, files, minRating, ignores) => {
       .filter(file => !ignore.includes(file.filepath))
       // 2. Calculate distance between reference and candidate
       .map(file => {
-        return {...file, rating: dice(ref.filename, file.filename)};
+        return {...file, rating: dice(ref.filename, file.filename, bigrams)};
       })
       // 3. filter out results < threshold
       .filter(file => file.rating > minRating)
@@ -92,34 +79,6 @@ const findSimilar = (ref, files, minRating, ignores) => {
         return matches.concat(findSimilar(file, files, minRating, ignores));
       }, [])
   );
-};
-
-const readIgnores = (ignoreFile, separator) => {
-  if (!fs.existsSync(ignoreFile)) return new Map();
-
-  try {
-    return fs
-      .readFileSync(ignoreFile, {encoding: 'utf8', flag: 'r'})
-      .split(/[\n\r]/)
-      .reduce(
-        (state, line, index, lines) => {
-          const clean = line.trim();
-          if (clean === separator) {
-            state.current.forEach(k => {
-              state.ignores.set(k, state.current);
-            });
-            state.current = [];
-          } else if (clean.length) {
-            state.current.push(clean);
-          }
-          return state;
-        },
-        {ignores: new Map(), current: []},
-      ).ignores;
-  } catch (e) {
-    console.warn(`Failed to read ignore file ${ignoreFile}: ${e.message}`);
-    return new Map();
-  }
 };
 
 const getFiles = (dir, recursive, prefix) => {
@@ -140,43 +99,4 @@ const getFiles = (dir, recursive, prefix) => {
   }, new Map());
 };
 
-// Implementation of Dice coefficient with memoization of bigrams
-// https://en.wikipedia.org/wiki/S%C3%B8rensen%E2%80%93Dice_coefficient
-// Adapted from https://github.com/ka-weihe/fast-dice-coefficient
-const getBigrams = str => {
-  const map = bigrams.get(str) || new Map();
-  if (!map.size) {
-    let i, j, ref;
-    for (i = j = 0, ref = str.length - 2; 0 <= ref ? j <= ref : j >= ref; i = 0 <= ref ? ++j : --j) {
-      const bi = str.substr(i, 2);
-      const repeats = 1 + (map.get(bi) || 0);
-      map.set(bi, repeats);
-    }
-    bigrams.set(str, map);
-  }
-  return map;
-};
-
-const dice = (fst, snd) => {
-  if (fst.length < 2 || snd.length < 2) {
-    return 0;
-  }
-  const map1 = getBigrams(fst);
-  const map2 = getBigrams(snd);
-  let match = 0;
-  if (map1.length > map2.length) {
-    map2.forEach((v, k) => {
-      if (map1.has(k)) {
-        match += Math.min(v, map1.get(k));
-      }
-    });
-  } else {
-    map1.forEach((v, k) => {
-      if (map2.has(k)) {
-        match += Math.min(v, map2.get(k));
-      }
-    });
-  }
-  return (2.0 * match) / (fst.length + snd.length - 2);
-};
 export default fsim;
