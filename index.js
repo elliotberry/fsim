@@ -1,12 +1,10 @@
 #!/usr/bin/env node
-import fs from 'fs';
-import meow from 'meow';
 import path from 'path';
-import fsim from './fsim.js';  
+import fsim from './lib/fsim.js';  
 import yargs from 'yargs/yargs';
 
-const IGNORE_FILE = '.fsimignore';
-const CACHE_FILE = '.fsimcache';
+
+//default values
 const SEPARATOR = '--';
 const MIN_RATING = 0.7;
 
